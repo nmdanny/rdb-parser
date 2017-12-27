@@ -69,11 +69,18 @@ named!(database_size<Option<DatabaseSize>>, opt!(preceded!(tag!(&[op_code::RESIZ
     })
 ))));
 
+// If we encounter a SELECTDB or an EOF, it means we've finished with our current DB so we
+// shouldn't parse the upcoming input as another key-value pair
+named!(should_continue_parsing_db_entries, not!(alt!(
+    tag!(&[op_code::SELECTDB]) | tag!(&[op_code::EOF])
+)));
+
+
 /* Key value related parsers */
 named!(key_value_pairs<Vec<KeyValuePair>>, many0!(key_value_pair));
 
 named!(key_value_pair<KeyValuePair>, do_parse!(
-    not!(tag!(&[op_code::SELECTDB])) >>
+    should_continue_parsing_db_entries >>
     expiry: expiry >>
     value_type: take!(1) >>
     key: read_string >>
@@ -170,9 +177,6 @@ fn read_hash_ziplist(input: &[u8]) -> IResult<&[u8], HashMap<RedisString, RedisS
 
 fn read_ziplist_string(ziplist: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     let mut entries = Vec::new();
-    // ziplist_buf lives until the end of the function,
-    // yet for some reason, it needs the function's lifetime 'a
-    // why? probably something to do with try_parse macro, which uses the function's lifetime
     let (ziplist, zlbytes)= try_parse!(ziplist, le_u32);
     let (ziplist, zltail) = try_parse!(ziplist, le_u32);
     let (ziplist, zllen) = try_parse!(ziplist, le_u16);
@@ -181,8 +185,7 @@ fn read_ziplist_string(ziplist: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     for i in 0..zllen {
         let (ziplist, prev_len) = try_parse!(ziplist_iter, be_u8);
         let (ziplist, prev_len) = if prev_len < 254 {(ziplist, prev_len as u32)} else {try_parse!(ziplist, be_u32)};
-        //let (ziplist, special_flag) = try_parse!(ziplist, be_u8);
-        println!("  parsing entry no {}, prev-len: {}, sf-byte: {:08b}", i, prev_len, ziplist[0]);
+        println!("  parsing entry no {}, prev-len: {}, flag-byte: {:08b}", i, prev_len, ziplist[0]);
         let (ziplist, entry) = try_parse!(ziplist, alt!(
             special_flag_6bit_len_string | special_flag_14bit_len_string | special_flag_4byte_len_string |
             special_flag_64bit | special_flag_32bit | special_flag_24bit | special_flag_16bit | special_flag_8bit |
@@ -339,7 +342,7 @@ fn read_string(input: &[u8]) -> IResult<&[u8], RedisString> {
             comp_bytes: take!(comp_len) >>
             (lzf::decompress(comp_bytes, full_len as usize).unwrap())
         ),
-        _ => panic!("unsupported enc_fmt '{}'", len)
+        _ => panic!("while reading string, unsupported enc_fmt '{}'", len)
     }
 }
 
@@ -374,7 +377,7 @@ fn can_decode_database_ending() {
 fn can_decode_rdb() {
     let whole_rdb = include_bytes!("../rdbs/2.rdb");
     let rdb = rdb(whole_rdb).to_full_result().unwrap();
-    println!("");
+    println!();
     println!("rdb version is {}", rdb.version);
     println!("rdb has those aux codes: {}", rdb.aux_codes
         .iter()
@@ -383,8 +386,9 @@ fn can_decode_rdb() {
                                                String::from_utf8_lossy(value)))
         .collect::<Vec<String>>().join(", "));
     println!("rdb has {} databases", rdb.databases.len());
+    println!("rdb has {} entries", rdb.databases.iter().map(|d| d.entries.len()).sum::<usize>());
     println!("rdb checksum is {:?}", rdb.crc64_checksum);
-    //assert_eq!(true, false);
+    // assert_eq!(true, false);
 }
 
 #[test]
