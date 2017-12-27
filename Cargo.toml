@@ -5,7 +5,7 @@ authors = ["NMDanny <nmdanny@gmail.com>"]
 
 [dependencies]
 nom = { version =  "3.2.1", features = ["verbose-errors"]}
-byteorder = "1.2.1"
-serde = "1.0.25"
-failure = "0.1.1"
-lzf = "0.3.1"
+byteorder = "^1"
+serde = "^1"
+failure = "^0.1"
+lzf = "^0.3"
