@@ -242,34 +242,6 @@ named!(special_flag_4bit<RedisString>, map!(verify!(bits!(do_parse!(
     (val as i8 - 1)
 )),|val| val > 0b0000 && val <= 0b1101), |i| i.to_string().into_bytes()));
 
-fn i64_to_bytes(i: i64) -> Vec<u8> {
-    let mut vec = Vec::new();
-    vec.write_i64::<LittleEndian>(i).unwrap();
-    vec
-}
-
-fn i32_to_bytes(i: i32) -> Vec<u8> {
-    let mut vec = Vec::new();
-    vec.write_i32::<LittleEndian>(i).unwrap();
-    vec
-}
-
-fn i24_to_bytes(i: i32) -> Vec<u8> {
-    let mut vec = Vec::new();
-    vec.write_i24::<LittleEndian>(i).unwrap();
-    vec
-}
-
-fn i16_to_bytes(i: i16) -> Vec<u8> {
-    let mut vec = Vec::new();
-    vec.write_i16::<LittleEndian>(i).unwrap();
-    vec
-}
-
-fn i8_to_bytes(i: i8) -> Vec<u8> {
-    vec![i as u8]
-}
-
 /* More general parsers */
 
 /// Parses a redis length, tupled with whether it indicates a special format(if so,
