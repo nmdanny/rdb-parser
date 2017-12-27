@@ -148,7 +148,7 @@ fn read_hash(input: &[u8]) -> IResult<&[u8], HashMap<RedisString, RedisString>> 
     println!("making a hash with {} elements", entries_size);
     let mut hash = HashMap::with_capacity(entries_size as usize);
     let mut input_iter = input;
-    for i in 0..entries_size {
+    for _i in 0..entries_size {
         let (input, key) = try_parse!(input_iter, read_string);
         let (input, value) = try_parse!(input, read_string);
         hash.insert(key, value);
@@ -164,7 +164,7 @@ fn read_ziplist(input: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     match res {
         IResult::Done(_, entries) => IResult::Done(input, entries),
         IResult::Incomplete(needed) => IResult::Incomplete(needed),
-        IResult::Error(e) => IResult::Error(unimplemented!("todo error"))
+        IResult::Error(_e) => IResult::Error(unimplemented!("todo error"))
     }
 }
 
@@ -177,8 +177,8 @@ fn read_hash_ziplist(input: &[u8]) -> IResult<&[u8], HashMap<RedisString, RedisS
 
 fn read_ziplist_string(ziplist: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     let mut entries = Vec::new();
-    let (ziplist, zlbytes)= try_parse!(ziplist, le_u32);
-    let (ziplist, zltail) = try_parse!(ziplist, le_u32);
+    let (ziplist, _zlbytes)= try_parse!(ziplist, le_u32);
+    let (ziplist, _zltail) = try_parse!(ziplist, le_u32);
     let (ziplist, zllen) = try_parse!(ziplist, le_u16);
     println!("beginning parse of ziplist of len {}: '{}'", zllen, String::from_utf8_lossy(ziplist));
     let mut ziplist_iter = ziplist;
@@ -195,7 +195,7 @@ fn read_ziplist_string(ziplist: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
         entries.push(entry);
         ziplist_iter = ziplist;
     }
-    let (ziplist, tag) = try_parse!(ziplist_iter, tag!(&[255u8])); // end of ziplist
+    let (ziplist, _tag) = try_parse!(ziplist_iter, tag!(&[255u8])); // end of ziplist
 
     IResult::Done(ziplist, entries)
 }
@@ -232,29 +232,29 @@ named!(special_flag_4byte_len_string<RedisString>, do_parse!(
 
 fn i64_to_bytes(i: i64) -> Vec<u8> {
     let mut vec = Vec::new();
-    vec.write_i64::<BigEndian>(i);
+    vec.write_i64::<LittleEndian>(i).unwrap();
     vec
 }
 
 fn i32_to_bytes(i: i32) -> Vec<u8> {
     let mut vec = Vec::new();
-    vec.write_i32::<BigEndian>(i);
+    vec.write_i32::<LittleEndian>(i).unwrap();
     vec
 }
 
 fn i24_to_bytes(i: i32) -> Vec<u8> {
     let mut vec = Vec::new();
-    vec.write_i24::<BigEndian>(i);
+    vec.write_i24::<LittleEndian>(i).unwrap();
     vec
 }
 
 fn i16_to_bytes(i: i16) -> Vec<u8> {
     let mut vec = Vec::new();
-    vec.write_i16::<BigEndian>(i);
+    vec.write_i16::<LittleEndian>(i).unwrap();
     vec
 }
 
-fn i8_to_byte(i: i8) -> Vec<u8> {
+fn i8_to_bytes(i: i8) -> Vec<u8> {
     vec![i as u8]
 }
 
@@ -262,22 +262,22 @@ named!(special_flag_64bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b
 named!(special_flag_32bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1101)), le_i32), i32_to_bytes));
 named!(special_flag_16bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1100)), le_i16), i16_to_bytes));
 named!(special_flag_24bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11110000)), le_i24), i24_to_bytes));
-named!(special_flag_8bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11111110)), le_i8), i8_to_byte));
+named!(special_flag_8bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11111110)), le_i8), i8_to_bytes));
 // make sure to put this after the 24bit and 8bit parsers, otherwise it'll always match
 named!(special_flag_4bit<RedisString>, map!(verify!(bits!(do_parse!(
     tag_bits!(u8, 4, 0b1111) >>
     val: take_bits!(u8, 4) >>
     (val as i8 - 1)
-)),|val| val > 0b0000 && val <= 0b1101), i8_to_byte));
+)),|val| val > 0b0000 && val <= 0b1101), i8_to_bytes));
 
 #[test]
 fn test_6bit_len_string() {
-    let data = [0b0000011u8, 19, 37, 160, 1337];
+    let data = [0b0000011u8, 19, 37, 160, 182];
     assert_eq!(special_flag_6bit_len_string(&data[..]), IResult::Done(&data[4..], vec![19, 37, 160]));
 }
 #[test]
 fn test_14bit_len_string() {
-    let mut data = vec![0b01000000, 0b00000010, 27, 32, 1337];
+    let data = vec![0b01000000, 0b00000010, 27, 32, 125];
     assert_eq!(special_flag_14bit_len_string(&data[..]), IResult::Done(&data[4..], vec![27, 32]));
 
 }
@@ -285,9 +285,9 @@ fn test_14bit_len_string() {
 #[test]
 fn test_4byte_len_string() {
     let mut data = vec![];
-    data.write_u8(0b10000000);
-    data.write_u32::<BigEndian>(3);
-    data.extend_from_slice(&[10,20,30, 1337]);
+    data.write_u8(0b10000000).unwrap();
+    data.write_u32::<BigEndian>(3).unwrap();
+    data.extend_from_slice(&[10,20,30, 77]);
     assert_eq!(special_flag_4byte_len_string(&data[..]), IResult::Done(&data[data.len()-1..], vec![10, 20, 30]));
 }
 
@@ -312,10 +312,10 @@ fn read_length_with_encoding(input: &[u8]) -> IResult<&[u8], (u64, bool)> {
             let size = size_buf.read_u16::<BigEndian>().unwrap();
             IResult::Done(after_bytes, (size as u64, false))
         },
-        enc_type if byte0[0] == constant::RDB_32BITLEN => {
+        _ if byte0[0] == constant::RDB_32BITLEN => {
             be_u32(after_bytes).map(|u|(u as u64, false))
         },
-        enc_type if byte0[0] == constant::RDB_64BITLEN => {
+        _ if byte0[0] == constant::RDB_64BITLEN => {
             be_u64(after_bytes).map(|u| (u, false))
         },
         _ => panic!("while reading length, unknown enc_type '{}'", enc_type)
@@ -355,8 +355,8 @@ fn can_decode_rdb_version() {
 
 #[test]
 fn can_decode_database_header() {
-    let data = &[0xFE, 0b00101101, 0xDEADBEEF];
-    let data_2 = &[0xFE, 0, 0x1337];
+    let data = &[0xFE, 0b00101101, 0x4B];
+    let data_2 = &[0xFE, 0, 0x4B];
     assert_eq!(database_header_number(data), IResult::Done(&data[2..], 0b00101101));
     assert_eq!(database_header_number(data_2), IResult::Done(&data_2[2..], 0));
 }
@@ -365,8 +365,8 @@ fn can_decode_database_header() {
 fn can_decode_database_ending() {
     let data = &[0xFF];
     let data_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04];
-    let illegal = &[0xFF, 0x1337];
-    let illegal_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04, 0x1337];
+    let illegal = &[0xFF, 0x4C];
+    let illegal_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04, 0x64];
     assert_eq!(rdb_ending_checksum(data), IResult::Done(&b""[..], None));
     assert_eq!(rdb_ending_checksum(data_2), IResult::Done(&b""[..], Some(0x0A010B020C030D04)));
     assert!(rdb_ending_checksum(illegal).is_err());
@@ -397,8 +397,8 @@ fn can_decode_expiry() {
     let mut data_ms = vec![0xFC];
     data_s.write_u32::<LittleEndian>(1337).unwrap();
     data_ms.write_u64::<LittleEndian>(1337).unwrap();
-    data_s.write_u32::<LittleEndian>(0xDEADBEEF);
-    let data_neither = &[1337, 0xDEADBEEF];
+    data_s.write_u64::<LittleEndian>(0xDEADBEEF).unwrap();
+    let data_neither = &[54, 101, 41, 41];
     assert_eq!(expiry(&data_s), IResult::Done(&data_s[5..], Some(Duration::from_secs(1337))));
     assert_eq!(expiry(&data_ms), IResult::Done(&data_ms[9..], Some(Duration::from_millis(1337))));
     assert_eq!(expiry(data_neither), IResult::Done(&data_neither[..], None));
@@ -413,14 +413,14 @@ fn can_read_length_decode() {
     let mut bits_32= Vec::<u8>::new();
     let mut bits_64= Vec::<u8>::new();
 
-    bits_32.write_u8(constant::RDB_32BITLEN);
-    bits_32.write_u32::<BigEndian>(1337);
-    bits_32.write_u8(78);
+    bits_32.write_u8(constant::RDB_32BITLEN).unwrap();
+    bits_32.write_u32::<BigEndian>(1337).unwrap();
+    bits_32.write_u8(78).unwrap();
 
-    bits_64.write_u8(constant::RDB_64BITLEN);
-    bits_64.write_u64::<BigEndian>(1337);
-    bits_64.write_u8(50);
-    bits_64.write_u32::<BigEndian>(0xDEADBEEF);
+    bits_64.write_u8(constant::RDB_64BITLEN).unwrap();
+    bits_64.write_u64::<BigEndian>(1337).unwrap();
+    bits_64.write_u8(50).unwrap();
+    bits_64.write_u64::<BigEndian>(0xDEADBEEF).unwrap();
 
     assert_eq!(read_length_with_encoding(&bits_6), IResult::Done(&bits_6[1..], (0b00100011, false)), "6 bit read_length");
     assert_eq!(read_length_with_encoding(&bits_enc_val), IResult::Done(&bits_enc_val[1..], (0b00101010, true)), "enc-val read_length");
