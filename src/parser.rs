@@ -15,7 +15,7 @@ use std::iter::FromIterator;
 use lzf;
 
 /* RDB related parsers */
-named!(rdb<RDB>,
+named!(pub rdb<RDB>,
     do_parse!(
         version: rdb_header_version >>
         aux_codes: rdb_auxes >>
