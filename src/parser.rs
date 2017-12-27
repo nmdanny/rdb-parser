@@ -191,7 +191,7 @@ fn read_ziplist_string(ziplist: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
             special_flag_64bit | special_flag_32bit | special_flag_24bit | special_flag_16bit | special_flag_8bit |
             special_flag_4bit
         ));
-        println!("    found ziplist entry: {}", String::from_utf8_lossy(&entry));
+        println!("    found ziplist entry: {} = {:?}", String::from_utf8_lossy(&entry), entry);
         entries.push(entry);
         ziplist_iter = ziplist;
     }
@@ -230,6 +230,18 @@ named!(special_flag_4byte_len_string<RedisString>, do_parse!(
 ));
 
 
+named!(special_flag_64bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1110)), le_i64), |i| i.to_string().into_bytes()));
+named!(special_flag_32bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1101)), le_i32), |i| i.to_string().into_bytes()));
+named!(special_flag_16bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1100)), le_i16), |i| i.to_string().into_bytes()));
+named!(special_flag_24bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11110000)), le_i24), |i| i.to_string().into_bytes()));
+named!(special_flag_8bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11111110)), le_i8), |i| i.to_string().into_bytes()));
+// make sure to put this after the 24bit and 8bit parsers, otherwise it'll always match
+named!(special_flag_4bit<RedisString>, map!(verify!(bits!(do_parse!(
+    tag_bits!(u8, 4, 0b1111) >>
+    val: take_bits!(u8, 4) >>
+    (val as i8 - 1)
+)),|val| val > 0b0000 && val <= 0b1101), |i| i.to_string().into_bytes()));
+
 fn i64_to_bytes(i: i64) -> Vec<u8> {
     let mut vec = Vec::new();
     vec.write_i64::<LittleEndian>(i).unwrap();
@@ -258,42 +270,9 @@ fn i8_to_bytes(i: i8) -> Vec<u8> {
     vec![i as u8]
 }
 
-named!(special_flag_64bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1110)), le_i64), i64_to_bytes));
-named!(special_flag_32bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1101)), le_i32), i32_to_bytes));
-named!(special_flag_16bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 4, 0b1100)), le_i16), i16_to_bytes));
-named!(special_flag_24bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11110000)), le_i24), i24_to_bytes));
-named!(special_flag_8bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b11111110)), le_i8), i8_to_bytes));
-// make sure to put this after the 24bit and 8bit parsers, otherwise it'll always match
-named!(special_flag_4bit<RedisString>, map!(verify!(bits!(do_parse!(
-    tag_bits!(u8, 4, 0b1111) >>
-    val: take_bits!(u8, 4) >>
-    (val as i8 - 1)
-)),|val| val > 0b0000 && val <= 0b1101), i8_to_bytes));
-
-#[test]
-fn test_6bit_len_string() {
-    let data = [0b0000011u8, 19, 37, 160, 182];
-    assert_eq!(special_flag_6bit_len_string(&data[..]), IResult::Done(&data[4..], vec![19, 37, 160]));
-}
-#[test]
-fn test_14bit_len_string() {
-    let data = vec![0b01000000, 0b00000010, 27, 32, 125];
-    assert_eq!(special_flag_14bit_len_string(&data[..]), IResult::Done(&data[4..], vec![27, 32]));
-
-}
-
-#[test]
-fn test_4byte_len_string() {
-    let mut data = vec![];
-    data.write_u8(0b10000000).unwrap();
-    data.write_u32::<BigEndian>(3).unwrap();
-    data.extend_from_slice(&[10,20,30, 77]);
-    assert_eq!(special_flag_4byte_len_string(&data[..]), IResult::Done(&data[data.len()-1..], vec![10, 20, 30]));
-}
-
 /* More general parsers */
 
-/// Parses a redis read_length, tupled with whether it indicates a special format(if so,
+/// Parses a redis length, tupled with whether it indicates a special format(if so,
 /// the "read_length" actually identifies the format)
 fn read_length_with_encoding(input: &[u8]) -> IResult<&[u8], (u64, bool)> {
     let (after_bytes,byte0) = try_parse!(input,take!(1));
@@ -323,12 +302,12 @@ fn read_length_with_encoding(input: &[u8]) -> IResult<&[u8], (u64, bool)> {
 }
 
 
-/// Parses a redis read_length
+/// Parses a redis length
 fn read_length(input: &[u8]) -> IResult<&[u8], u64> {
     map!(input, read_length_with_encoding, |t| {/*println!("  read length {}", t.0);*/ t.0})
 }
 
-/// Parses a redis string
+/// Parses a redis string. If it encodes numbers, they'll be converted to their ASCII bytes representation.
 fn read_string(input: &[u8]) -> IResult<&[u8], RedisString> {
     let (input, (len, custom_fmt)) = try_parse!(input, read_length_with_encoding);
     match len as u32 {
@@ -346,91 +325,119 @@ fn read_string(input: &[u8]) -> IResult<&[u8], RedisString> {
     }
 }
 
-#[test]
-fn can_decode_rdb_version() {
-    let data = b"REDIS0008MORE";
-    println!("input: {}", data.to_hex(16));
-    assert_eq!(rdb_header_version(data), IResult::Done(&b"MORE"[..], 8));
-}
 
-#[test]
-fn can_decode_database_header() {
-    let data = &[0xFE, 0b00101101, 0x4B];
-    let data_2 = &[0xFE, 0, 0x4B];
-    assert_eq!(database_header_number(data), IResult::Done(&data[2..], 0b00101101));
-    assert_eq!(database_header_number(data_2), IResult::Done(&data_2[2..], 0));
-}
+/* Tests */
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn can_decode_database_ending() {
-    let data = &[0xFF];
-    let data_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04];
-    let illegal = &[0xFF, 0x4C];
-    let illegal_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04, 0x64];
-    assert_eq!(rdb_ending_checksum(data), IResult::Done(&b""[..], None));
-    assert_eq!(rdb_ending_checksum(data_2), IResult::Done(&b""[..], Some(0x0A010B020C030D04)));
-    assert!(rdb_ending_checksum(illegal).is_err());
-    assert!(rdb_ending_checksum(illegal_2).is_err());
-}
+    #[test]
+    fn test_6bit_len_string() {
+        let data = [0b0000011u8, 19, 37, 160, 182];
+        assert_eq!(special_flag_6bit_len_string(&data[..]), IResult::Done(&data[4..], vec![19, 37, 160]));
+    }
 
-#[test]
-fn can_decode_rdb() {
-    let whole_rdb = include_bytes!("../rdbs/2.rdb");
-    let rdb = rdb(whole_rdb).to_full_result().unwrap();
-    println!();
-    println!("rdb version is {}", rdb.version);
-    println!("rdb has those aux codes: {}", rdb.aux_codes
-        .iter()
-        .map(
-            |(key,value)| format!("{}:{}", String::from_utf8_lossy(key),
-                                               String::from_utf8_lossy(value)))
-        .collect::<Vec<String>>().join(", "));
-    println!("rdb has {} databases", rdb.databases.len());
-    println!("rdb has {} entries", rdb.databases.iter().map(|d| d.entries.len()).sum::<usize>());
-    println!("rdb checksum is {:?}", rdb.crc64_checksum);
-    // assert_eq!(true, false);
-}
+    #[test]
+    fn test_14bit_len_string() {
+        let data = vec![0b01000000, 0b00000010, 27, 32, 125];
+        assert_eq!(special_flag_14bit_len_string(&data[..]), IResult::Done(&data[4..], vec![27, 32]));
 
-#[test]
-fn can_decode_expiry() {
-    let mut data_s = vec![0xFD];
-    let mut data_ms = vec![0xFC];
-    data_s.write_u32::<LittleEndian>(1337).unwrap();
-    data_ms.write_u64::<LittleEndian>(1337).unwrap();
-    data_s.write_u64::<LittleEndian>(0xDEADBEEF).unwrap();
-    let data_neither = &[54, 101, 41, 41];
-    assert_eq!(expiry(&data_s), IResult::Done(&data_s[5..], Some(Duration::from_secs(1337))));
-    assert_eq!(expiry(&data_ms), IResult::Done(&data_ms[9..], Some(Duration::from_millis(1337))));
-    assert_eq!(expiry(data_neither), IResult::Done(&data_neither[..], None));
+    }
 
-}
+    #[test]
+    fn test_4byte_len_string() {
+        let mut data = vec![];
+        data.write_u8(0b10000000).unwrap();
+        data.write_u32::<BigEndian>(3).unwrap();
+        data.extend_from_slice(&[10,20,30, 77]);
+        assert_eq!(special_flag_4byte_len_string(&data[..]), IResult::Done(&data[data.len()-1..], vec![10, 20, 30]));
+    }
 
-#[test]
-fn can_read_length_decode() {
-    let bits_6 = vec![ 0b00100011, 50];
-    let bits_enc_val= vec![0b11101010, 50];
-    let bits_14 = vec![ 0b01100011, 0b00100011, 50];
-    let mut bits_32= Vec::<u8>::new();
-    let mut bits_64= Vec::<u8>::new();
+    #[test]
+    fn can_decode_rdb_version() {
+        let data = b"REDIS0008MORE";
+        println!("input: {}", data.to_hex(16));
+        assert_eq!(rdb_header_version(data), IResult::Done(&b"MORE"[..], 8));
+    }
 
-    bits_32.write_u8(constant::RDB_32BITLEN).unwrap();
-    bits_32.write_u32::<BigEndian>(1337).unwrap();
-    bits_32.write_u8(78).unwrap();
+    #[test]
+    fn can_decode_database_header() {
+        let data = &[0xFE, 0b00101101, 0x4B];
+        let data_2 = &[0xFE, 0, 0x4B];
+        assert_eq!(database_header_number(data), IResult::Done(&data[2..], 0b00101101));
+        assert_eq!(database_header_number(data_2), IResult::Done(&data_2[2..], 0));
+    }
 
-    bits_64.write_u8(constant::RDB_64BITLEN).unwrap();
-    bits_64.write_u64::<BigEndian>(1337).unwrap();
-    bits_64.write_u8(50).unwrap();
-    bits_64.write_u64::<BigEndian>(0xDEADBEEF).unwrap();
+    #[test]
+    fn can_decode_database_ending() {
+        let data = &[0xFF];
+        let data_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04];
+        let illegal = &[0xFF, 0x4C];
+        let illegal_2 = &[0xFF, 0x0A, 0x01, 0x0B, 0x02, 0x0C, 0x03, 0x0D, 0x04, 0x64];
+        assert_eq!(rdb_ending_checksum(data), IResult::Done(&b""[..], None));
+        assert_eq!(rdb_ending_checksum(data_2), IResult::Done(&b""[..], Some(0x0A010B020C030D04)));
+        assert!(rdb_ending_checksum(illegal).is_err());
+        assert!(rdb_ending_checksum(illegal_2).is_err());
+    }
 
-    assert_eq!(read_length_with_encoding(&bits_6), IResult::Done(&bits_6[1..], (0b00100011, false)), "6 bit read_length");
-    assert_eq!(read_length_with_encoding(&bits_enc_val), IResult::Done(&bits_enc_val[1..], (0b00101010, true)), "enc-val read_length");
-    assert_eq!(read_length_with_encoding(&bits_14), IResult::Done(&bits_14[2..], (0b0010001100100011, false)), "14 bit read_length");
-    assert_eq!(read_length_with_encoding(&bits_32), IResult::Done(&bits_32[5..], (1337, false)), "32 bit read_length");
-    assert_eq!(read_length_with_encoding(&bits_64), IResult::Done(&bits_64[9..], (1337, false)), "64 bit read_length");
+    #[test]
+    fn can_decode_rdb() {
+        let whole_rdb = include_bytes!("../rdbs/1.rdb");
+        let rdb = rdb(whole_rdb).to_full_result().unwrap();
+        println!();
+        println!("rdb version is {}", rdb.version);
+        println!("rdb has those aux codes: {}", rdb.aux_codes
+            .iter()
+            .map(
+                |(key,value)| format!("{}:{}", String::from_utf8_lossy(key),
+                                      String::from_utf8_lossy(value)))
+            .collect::<Vec<String>>().join(", "));
+        println!("rdb has {} databases", rdb.databases.len());
+        println!("rdb has {} entries", rdb.databases.iter().map(|d| d.entries.len()).sum::<usize>());
+        println!("rdb checksum is {:?}", rdb.crc64_checksum);
+    }
 
-}
+    #[test]
+    fn can_decode_expiry() {
+        let mut data_s = vec![0xFD];
+        let mut data_ms = vec![0xFC];
+        data_s.write_u32::<LittleEndian>(1337).unwrap();
+        data_ms.write_u64::<LittleEndian>(1337).unwrap();
+        data_s.write_u64::<LittleEndian>(0xDEADBEEF).unwrap();
+        let data_neither = &[54, 101, 41, 41];
+        assert_eq!(expiry(&data_s), IResult::Done(&data_s[5..], Some(Duration::from_secs(1337))));
+        assert_eq!(expiry(&data_ms), IResult::Done(&data_ms[9..], Some(Duration::from_millis(1337))));
+        assert_eq!(expiry(data_neither), IResult::Done(&data_neither[..], None));
 
-#[test]
-fn can_string_decode() {
+    }
 
+    #[test]
+    fn can_read_length_decode() {
+        let bits_6 = vec![ 0b00100011, 50];
+        let bits_enc_val= vec![0b11101010, 50];
+        let bits_14 = vec![ 0b01100011, 0b00100011, 50];
+        let mut bits_32= Vec::<u8>::new();
+        let mut bits_64= Vec::<u8>::new();
+
+        bits_32.write_u8(constant::RDB_32BITLEN).unwrap();
+        bits_32.write_u32::<BigEndian>(1337).unwrap();
+        bits_32.write_u8(78).unwrap();
+
+        bits_64.write_u8(constant::RDB_64BITLEN).unwrap();
+        bits_64.write_u64::<BigEndian>(1337).unwrap();
+        bits_64.write_u8(50).unwrap();
+        bits_64.write_u64::<BigEndian>(0xDEADBEEF).unwrap();
+
+        assert_eq!(read_length_with_encoding(&bits_6), IResult::Done(&bits_6[1..], (0b00100011, false)), "6 bit read_length");
+        assert_eq!(read_length_with_encoding(&bits_enc_val), IResult::Done(&bits_enc_val[1..], (0b00101010, true)), "enc-val read_length");
+        assert_eq!(read_length_with_encoding(&bits_14), IResult::Done(&bits_14[2..], (0b0010001100100011, false)), "14 bit read_length");
+        assert_eq!(read_length_with_encoding(&bits_32), IResult::Done(&bits_32[5..], (1337, false)), "32 bit read_length");
+        assert_eq!(read_length_with_encoding(&bits_64), IResult::Done(&bits_64[9..], (1337, false)), "64 bit read_length");
+
+    }
+
+    #[test]
+    fn can_string_decode() {
+
+    }
 }

@@ -60,6 +60,7 @@ impl ::std::fmt::Display for RedisValue {
     }
 }
 
+// TODO: Make this an enum that can hold an i32, instead of representing integers as their ASCII byte representations.
 pub type RedisString = Vec<u8>;
 
 
