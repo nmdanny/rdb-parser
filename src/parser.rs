@@ -9,7 +9,7 @@ use nom::{IResult, HexDisplay,
           le_u64, le_u32, le_u24, le_u16, le_u8,
           le_i64, le_i32, le_i24, le_i16, le_i8
 };
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::time::Duration;
 use std::iter::FromIterator;
 use lzf;
@@ -388,14 +388,14 @@ fn can_decode_rdb() {
 }
 
 #[test]
-fn can_decode_expirations() {
+fn can_decode_expiry() {
     let mut data_s = vec![0xFD];
     let mut data_ms = vec![0xFC];
-    data_s.write_u64::<BigEndian>(1337).unwrap();
-    data_ms.write_u64::<BigEndian>(1337).unwrap();
-    data_s.write_u32::<BigEndian>(0xDEADBEEF);
+    data_s.write_u32::<LittleEndian>(1337).unwrap();
+    data_ms.write_u64::<LittleEndian>(1337).unwrap();
+    data_s.write_u32::<LittleEndian>(0xDEADBEEF);
     let data_neither = &[1337, 0xDEADBEEF];
-    assert_eq!(expiry(&data_s), IResult::Done(&data_s[9..], Some(Duration::from_secs(1337))));
+    assert_eq!(expiry(&data_s), IResult::Done(&data_s[5..], Some(Duration::from_secs(1337))));
     assert_eq!(expiry(&data_ms), IResult::Done(&data_ms[9..], Some(Duration::from_millis(1337))));
     assert_eq!(expiry(data_neither), IResult::Done(&data_neither[..], None));
 
