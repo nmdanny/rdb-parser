@@ -122,7 +122,7 @@ fn read_value(input: &[u8], value_type: u8) -> IResult<&[u8], RedisValue> {
         EncodedType::ZSET_2 => unimplemented!("ZSET_2"),
         EncodedType::MODULE => unimplemented!("MODULE"),
         EncodedType::MODULE_2 => unimplemented!("MODULE_2"),
-        EncodedType::HASH_ZIPMAP => unimplemented!("HASH_ZIPMAP"),
+        EncodedType::HASH_ZIPMAP => map!(input, read_zipmap, RedisValue::Hash),
         EncodedType::LIST_ZIPLIST => map!(input, read_ziplist, RedisValue::List),
         EncodedType::SET_INTSET => map!(input, read_intset, RedisValue::Set),
         EncodedType::ZSET_ZIPLIST => unimplemented!("ZSET_ZIPLIST"),
@@ -267,6 +267,44 @@ fn read_intset_string(input: &[u8]) -> IResult<&[u8], HashSet<RedisString>> {
     IResult::Done(input, set )
 }
 
+fn read_zipmap(input: &[u8]) -> IResult<&[u8], HashMap<RedisString, RedisString>> {
+    let (input, zipmap_buf) = try_parse!(input, read_string);
+    let res = read_zipmap_string(&zipmap_buf);
+    match res {
+        IResult::Done(_, set) => IResult::Done(input, set),
+        IResult::Incomplete(needed) => IResult::Incomplete(needed),
+        IResult::Error(e) => IResult::Error(panic!("read_zipmap: error {}", e))
+    }
+}
+
+fn read_zipmap_string(input: &[u8]) -> IResult<&[u8], HashMap<RedisString, RedisString>> {
+    let (input, _zmlen) = try_parse!(input, le_u8);
+    let mut hash = HashMap::new();
+    let mut iter_input = input;
+    loop {
+        let (input, flag) = try_parse!(iter_input, le_u8);
+        if flag == 255 || flag == 254 {
+            break
+        }
+        let (input, key) = try_parse!(input, call!(read_zipmap_entry_string, flag));
+        let (input, flag) = try_parse!(input, le_u8);
+        let (input, free) = try_parse!(input, le_u8);
+        let (input, value) = try_parse!(input, call!(read_zipmap_entry_string, flag));
+        hash.insert(key, value);
+        let (input, _free_bytes) = try_parse!(input, take!(free));
+        iter_input = input;
+    }
+    IResult::Done(input, hash)
+}
+
+fn read_zipmap_entry_string(input: &[u8], flag: u8) -> IResult<&[u8], RedisString> {
+    if flag < 253  {
+        map!(input, take!(flag), |b| b.to_owned())
+    } else {
+        let (input, len) = try_parse!(input, le_u32);
+        map!(input, take!(len), |b| b.to_owned())
+    }
+}
 /* More general parsers */
 
 /// Parses a redis length, tupled with whether it indicates a special format(if so,
@@ -478,6 +516,13 @@ mod tests {
             .collect());
         assert_eq!(rdb_1.databases[0].entries[0].value, zl_1);
 
+    }
+
+    #[test]
+    fn can_decode_zipmap() {
+        let rdb_1 = rdb(include_bytes!("../rdbs/zipmap_that_compresses_easily.rdb")).to_full_result().unwrap();
+        let rdb_2 = rdb(include_bytes!("../rdbs/zipmap_that_doesnt_compress.rdb")).to_full_result().unwrap();
+        let rdb_3 = rdb(include_bytes!("../rdbs/zipmap_with_big_values.rdb")).to_full_result().unwrap();
     }
 
     #[test]
