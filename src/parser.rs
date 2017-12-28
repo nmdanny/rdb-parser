@@ -164,7 +164,7 @@ fn read_ziplist(input: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     match res {
         IResult::Done(_, entries) => IResult::Done(input, entries),
         IResult::Incomplete(needed) => IResult::Incomplete(needed),
-        IResult::Error(_e) => IResult::Error(unimplemented!("todo error at read_ziplist"))
+        IResult::Error(e) => IResult::Error(panic!("read_ziplist: error {:?}", e))
     }
 }
 
@@ -180,7 +180,7 @@ fn read_ziplist_string(ziplist: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     let (ziplist, _zlbytes)= try_parse!(ziplist, le_u32);
     let (ziplist, _zltail) = try_parse!(ziplist, le_u32);
     let (ziplist, zllen) = try_parse!(ziplist, le_u16);
-    println!("beginning parse of ziplist of len {}: '{}'", zllen, String::from_utf8_lossy(ziplist));
+    println!("beginning parse of ziplist of len {}: '{:?}'", zllen, ziplist);
     let mut ziplist_iter = ziplist;
     for i in 0..zllen {
         let (ziplist, prev_len) = try_parse!(ziplist_iter, be_u8);
@@ -239,8 +239,8 @@ named!(special_flag_8bit<RedisString>, map!(preceded!(bits!(tag_bits!(u8, 8, 0b1
 named!(special_flag_4bit<RedisString>, map!(verify!(bits!(do_parse!(
     tag_bits!(u8, 4, 0b1111) >>
     val: take_bits!(u8, 4) >>
-    (val as i8 - 1)
-)),|val| val > 0b0000 && val <= 0b1101), |i| i.to_string().into_bytes()));
+    (val as i8)
+)),|val| val > 0b0000 && val <= 0b1101), |i| (i-1).to_string().into_bytes()));
 
 
 fn read_intset(input: &[u8]) -> IResult<&[u8], HashSet<RedisString>> {
@@ -249,7 +249,7 @@ fn read_intset(input: &[u8]) -> IResult<&[u8], HashSet<RedisString>> {
     match res {
         IResult::Done(_, set) => IResult::Done(input, set),
         IResult::Incomplete(needed) => IResult::Incomplete(needed),
-        IResult::Error(_e) => IResult::Error(unimplemented!("todo error at read_intset"))
+        IResult::Error(e) => IResult::Error(panic!("read_intset: error {}", e))
     }
 }
 
@@ -450,6 +450,17 @@ mod tests {
         assert_eq!(rdb_1.databases[0].entries[0].value, set_1);
         assert_eq!(rdb_2.databases[0].entries[0].value, set_2);
         assert_eq!(rdb_3.databases[0].entries[0].value, set_3);
+
+    }
+
+    #[test]
+    fn can_decode_ziplist() {
+        println!("===TESTING ziplist_that_compresses_easily ===");
+        let rdb_1 = rdb(include_bytes!("../rdbs/ziplist_that_compresses_easily.rdb")).to_full_result().unwrap();
+        println!("===TESTING ziplist_that_doesnt_compress ===");
+        let rdb_2 = rdb(include_bytes!("../rdbs/ziplist_that_doesnt_compress.rdb")).to_full_result().unwrap();
+        println!("===TESTING ziplist_with_integers ===");
+        let rdb_3 = rdb(include_bytes!("../rdbs/ziplist_with_integers.rdb")).to_full_result().unwrap();
 
     }
 
