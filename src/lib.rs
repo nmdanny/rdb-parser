@@ -14,3 +14,4 @@ pub mod types;
 #[allow(unused_imports, dead_code)]
 pub mod constants;
 
+pub use parser::rdb;
