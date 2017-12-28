@@ -455,12 +455,28 @@ mod tests {
 
     #[test]
     fn can_decode_ziplist() {
-        println!("===TESTING ziplist_that_compresses_easily ===");
         let rdb_1 = rdb(include_bytes!("../rdbs/ziplist_that_compresses_easily.rdb")).to_full_result().unwrap();
-        println!("===TESTING ziplist_that_doesnt_compress ===");
         let rdb_2 = rdb(include_bytes!("../rdbs/ziplist_that_doesnt_compress.rdb")).to_full_result().unwrap();
-        println!("===TESTING ziplist_with_integers ===");
         let rdb_3 = rdb(include_bytes!("../rdbs/ziplist_with_integers.rdb")).to_full_result().unwrap();
+        let zl_1 = RedisValue::List(vec!["aaaaaa","aaaaaaaaaaaa","aaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+            .iter_mut().map(|s| s.as_bytes().to_owned()).collect());
+        let zl_2 = RedisValue::List(vec!["aj2410","cc953a17a8e096e76a44169ad3f9ac87c5f8248a403274416179aa9fbd852344"]
+            .iter_mut().map(|s| s.as_bytes().to_owned()).collect());
+        let zl_3 = RedisValue::List(vec!["0","1","2","3","4","5","6","7","8","9","10","11","12","-2","13","25","-61","63","16380","-16000","65535","-65523","4194304","9223372036854775807"]
+            .iter_mut().map(|s| s.as_bytes().to_owned()).collect());
+        assert_eq!(rdb_1.databases[0].entries[0].value, zl_1);
+        assert_eq!(rdb_2.databases[0].entries[0].value, zl_2);
+        assert_eq!(rdb_3.databases[0].entries[0].value, zl_3);
+    }
+
+    #[test]
+    fn can_decode_hash_ziplist() {
+        let rdb_1 = rdb(include_bytes!("../rdbs/hash_as_ziplist.rdb")).to_full_result().unwrap();
+        let zl_1 = RedisValue::Hash(vec![("a","aa"), ("aa", "aaaa"), ("aaaaa", "aaaaaaaaaaaaaa")]
+            .into_iter()
+            .map(|(k,v)| (k.as_bytes().to_owned(), v.as_bytes().to_owned()))
+            .collect());
+        assert_eq!(rdb_1.databases[0].entries[0].value, zl_1);
 
     }
 
