@@ -124,7 +124,7 @@ fn read_value(input: &[u8], value_type: u8) -> IResult<&[u8], RedisValue> {
         EncodedType::MODULE_2 => unimplemented!("MODULE_2"),
         EncodedType::HASH_ZIPMAP => unimplemented!("HASH_ZIPMAP"),
         EncodedType::LIST_ZIPLIST => map!(input, read_ziplist, RedisValue::List),
-        EncodedType::SET_INTSET => unimplemented!("SET_INTSET"),
+        EncodedType::SET_INTSET => map!(input, read_intset, RedisValue::Set),
         EncodedType::ZSET_ZIPLIST => unimplemented!("ZSET_ZIPLIST"),
         EncodedType::HASH_ZIPLIST => map!(input, read_hash_ziplist, RedisValue::Hash),
         EncodedType::LIST_QUICKLIST => unimplemented!("LIST_QUICKLIST"),
@@ -164,7 +164,7 @@ fn read_ziplist(input: &[u8]) -> IResult<&[u8], Vec<RedisString>> {
     match res {
         IResult::Done(_, entries) => IResult::Done(input, entries),
         IResult::Incomplete(needed) => IResult::Incomplete(needed),
-        IResult::Error(_e) => IResult::Error(unimplemented!("todo error"))
+        IResult::Error(_e) => IResult::Error(unimplemented!("todo error at read_ziplist"))
     }
 }
 
@@ -241,6 +241,31 @@ named!(special_flag_4bit<RedisString>, map!(verify!(bits!(do_parse!(
     val: take_bits!(u8, 4) >>
     (val as i8 - 1)
 )),|val| val > 0b0000 && val <= 0b1101), |i| i.to_string().into_bytes()));
+
+
+fn read_intset(input: &[u8]) -> IResult<&[u8], HashSet<RedisString>> {
+    let (input, intset_buf) = try_parse!(input, read_string);
+    let res = read_intset_string(&intset_buf);
+    match res {
+        IResult::Done(_, set) => IResult::Done(input, set),
+        IResult::Incomplete(needed) => IResult::Incomplete(needed),
+        IResult::Error(_e) => IResult::Error(unimplemented!("todo error at read_intset"))
+    }
+}
+
+fn read_intset_string(input: &[u8]) -> IResult<&[u8], HashSet<RedisString>> {
+    let (input, enc) = try_parse!(input, le_i32);
+    let (input, len) = try_parse!(input, le_i32);
+    println!("beginning parse of intset of enc {} and len {}", enc, len);
+    let (input, contents) = match enc {
+         2 => try_parse!(input, many_m_n!(len as usize, len as usize, map!(le_i16, |i| i.to_string().into_bytes()))),
+         4 => try_parse!(input, many_m_n!(len as usize, len as usize, map!(le_i32, |i| i.to_string().into_bytes()))),
+         8 => try_parse!(input, many_m_n!(len as usize, len as usize, map!(le_i64, |i| i.to_string().into_bytes()))),
+         _ => panic!("read_intset: unknown number encoding {}", enc)
+    };
+    let set = contents.into_iter().collect::<HashSet<_>>();
+    IResult::Done(input, set )
+}
 
 /* More general parsers */
 
@@ -405,6 +430,26 @@ mod tests {
         assert_eq!(read_length_with_encoding(&bits_14), IResult::Done(&bits_14[2..], (0b0010001100100011, false)), "14 bit read_length");
         assert_eq!(read_length_with_encoding(&bits_32), IResult::Done(&bits_32[5..], (1337, false)), "32 bit read_length");
         assert_eq!(read_length_with_encoding(&bits_64), IResult::Done(&bits_64[9..], (1337, false)), "64 bit read_length");
+
+    }
+
+    #[test]
+    fn can_decode_intset() {
+        let rdb_1 = rdb(include_bytes!("../rdbs/intset_16.rdb")).to_full_result().unwrap();
+        let rdb_2 = rdb(include_bytes!("../rdbs/intset_32.rdb")).to_full_result().unwrap();
+        let rdb_3 = rdb(include_bytes!("../rdbs/intset_64.rdb")).to_full_result().unwrap();
+        let set_1 = RedisValue::Set(vec!["32764".as_bytes().to_owned(),
+                                         "32765".as_bytes().to_owned(),
+                                         "32766".as_bytes().to_owned()].into_iter().collect());
+        let set_2 = RedisValue::Set(vec!["2147418108".as_bytes().to_owned(),
+                                         "2147418109".as_bytes().to_owned(),
+                                         "2147418110".as_bytes().to_owned()].into_iter().collect());
+        let set_3 = RedisValue::Set(vec!["9223090557583032316".as_bytes().to_owned(),
+                                         "9223090557583032317".as_bytes().to_owned(),
+                                         "9223090557583032318".as_bytes().to_owned()].into_iter().collect());
+        assert_eq!(rdb_1.databases[0].entries[0].value, set_1);
+        assert_eq!(rdb_2.databases[0].entries[0].value, set_2);
+        assert_eq!(rdb_3.databases[0].entries[0].value, set_3);
 
     }
 
